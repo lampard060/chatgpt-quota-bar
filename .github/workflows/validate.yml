@@ -1,0 +1,21 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: swift test
+      - name: Build application bundle
+        run: ./scripts/build.sh
+      - name: Verify application signature
+        run: codesign --verify --deep --strict --verbose=2 "build/ChatGPT 额度.app"
