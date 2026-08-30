@@ -37,9 +37,43 @@ import Testing
     #expect(snapshot.resetCreditCount == 1)
 }
 
+@Test func parsesResetCreditExpiry() throws {
+    let response: [String: Any] = [
+        "id": 2,
+        "result": [
+            "rateLimits": [
+                "credits": ["hasCredits": false, "unlimited": false],
+            ],
+            "rateLimitResetCredits": [
+                "availableCount": 1,
+                "credits": [[
+                    "status": "available",
+                    "title": "Full reset",
+                    "expiresAt": 1_789_944_845,
+                ]],
+            ],
+        ],
+    ]
+
+    let snapshot = try QuotaSnapshot.parseRPCResponse(response)
+    #expect(snapshot.resetCredits.count == 1)
+    #expect(snapshot.resetCredits.first?.status == "available")
+    #expect(snapshot.resetCredits.first?.expiresAt?.timeIntervalSince1970 == 1_789_944_845)
+}
+
 @Test func clampsRemainingPercent() {
     #expect(QuotaWindow(dictionary: ["usedPercent": -5])?.remainingPercent == 100)
     #expect(QuotaWindow(dictionary: ["usedPercent": 140])?.remainingPercent == 0)
+}
+
+@Test func parsesNumericCreditBalance() {
+    let credits = CreditsSnapshot(dictionary: [
+        "balance": 250,
+        "hasCredits": true,
+        "unlimited": false,
+    ])
+
+    #expect(credits?.balance == "250")
 }
 
 @Test func formatsCompactResetTimeAndDate() throws {
@@ -57,7 +91,8 @@ import Testing
             "resetsAt": Int(secondaryReset.timeIntervalSince1970),
         ]),
         credits: nil,
-        resetCreditCount: 1
+        resetCreditCount: 1,
+        resetCredits: []
     )
 
     let title = QuotaStatusFormatter(timeZone: timeZone).title(for: snapshot)

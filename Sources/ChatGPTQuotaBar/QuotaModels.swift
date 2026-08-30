@@ -35,9 +35,36 @@ struct CreditsSnapshot: Equatable {
             return nil
         }
 
-        balance = dictionary["balance"] as? String
+        if let balance = dictionary["balance"] as? String {
+            self.balance = balance
+        } else if let balance = dictionary["balance"] as? NSNumber {
+            // The desktop client has returned both JSON strings and numbers here.
+            self.balance = balance.stringValue
+        } else {
+            self.balance = nil
+        }
         self.hasCredits = hasCredits
         self.unlimited = unlimited
+    }
+}
+
+struct ResetCredit: Equatable {
+    let title: String?
+    let status: String?
+    let expiresAt: Date?
+
+    init?(dictionary: [String: Any]) {
+        guard let status = dictionary["status"] as? String else { return nil }
+
+        title = dictionary["title"] as? String
+        self.status = status
+        if let timestamp = dictionary["expiresAt"] as? TimeInterval {
+            expiresAt = Date(timeIntervalSince1970: timestamp)
+        } else if let timestamp = dictionary["expiresAt"] as? Int {
+            expiresAt = Date(timeIntervalSince1970: TimeInterval(timestamp))
+        } else {
+            expiresAt = nil
+        }
     }
 }
 
@@ -47,6 +74,7 @@ struct QuotaSnapshot: Equatable {
     let secondary: QuotaWindow?
     let credits: CreditsSnapshot?
     let resetCreditCount: Int?
+    let resetCredits: [ResetCredit]
 
     static func parseRPCResponse(_ object: Any) throws -> QuotaSnapshot {
         guard let envelope = object as? [String: Any] else {
@@ -62,12 +90,14 @@ struct QuotaSnapshot: Equatable {
         }
 
         let resetSummary = result["rateLimitResetCredits"] as? [String: Any]
+        let resetCredits = (resetSummary?["credits"] as? [[String: Any]] ?? []).compactMap(ResetCredit.init)
         return QuotaSnapshot(
             planType: limits["planType"] as? String,
             primary: QuotaWindow(dictionary: limits["primary"] as? [String: Any]),
             secondary: QuotaWindow(dictionary: limits["secondary"] as? [String: Any]),
             credits: CreditsSnapshot(dictionary: limits["credits"] as? [String: Any]),
-            resetCreditCount: resetSummary?["availableCount"] as? Int
+            resetCreditCount: (resetSummary?["availableCount"] as? NSNumber)?.intValue,
+            resetCredits: resetCredits
         )
     }
 }

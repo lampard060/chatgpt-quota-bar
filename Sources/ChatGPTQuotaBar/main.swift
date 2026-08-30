@@ -1,6 +1,297 @@
 import AppKit
 import Foundation
 
+private final class QuotaProgressView: NSView {
+    private let percentage: Int
+    private let fillColor: NSColor
+
+    init(percentage: Int, fillColor: NSColor) {
+        self.percentage = percentage
+        self.fillColor = fillColor
+        super.init(frame: .zero)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let track = bounds.insetBy(dx: 0, dy: 1)
+        NSColor.separatorColor.withAlphaComponent(0.45).setFill()
+        NSBezierPath(roundedRect: track, xRadius: 3, yRadius: 3).fill()
+
+        let width = track.width * CGFloat(max(0, min(100, percentage))) / 100
+        guard width > 0 else { return }
+        let fill = NSRect(x: track.minX, y: track.minY, width: width, height: track.height)
+        fillColor.setFill()
+        NSBezierPath(roundedRect: fill, xRadius: 3, yRadius: 3).fill()
+    }
+}
+
+private final class QuotaMenuCardView: NSView {
+    private static let width: CGFloat = 324
+    // The card contains two quota sections, two account rows, and three actions.
+    // Keep it tall enough so the reset-credit row is never compressed out of view.
+    private static let height: CGFloat = 436
+
+    init(
+        snapshot: QuotaSnapshot?,
+        lastUpdated: Date?,
+        lastError: String?,
+        isRefreshing: Bool,
+        target: AnyObject,
+        refreshAction: Selector,
+        openAction: Selector,
+        quitAction: Selector
+    ) {
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.width, height: Self.height))
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.98).cgColor
+
+        let content = NSStackView()
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 10
+        content.edgeInsets = NSEdgeInsets(top: 17, left: 18, bottom: 14, right: 18)
+        addSubview(content)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor),
+            content.topAnchor.constraint(equalTo: topAnchor),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        let heading = textLabel("额度概览", size: 16, weight: .semibold, color: .labelColor)
+        content.addArrangedSubview(heading)
+
+        if let snapshot {
+            let plan = "ChatGPT \(displayPlan(snapshot.planType))"
+            content.addArrangedSubview(textLabel(plan, size: 12, weight: .medium, color: .secondaryLabelColor))
+            content.addArrangedSubview(windowSection(
+                name: "5 小时额度",
+                resetName: "重置时间",
+                window: snapshot.primary,
+                resetFormat: .time
+            ))
+            content.addArrangedSubview(separator())
+            content.addArrangedSubview(windowSection(
+                name: "周额度",
+                resetName: "重置日期",
+                window: snapshot.secondary,
+                resetFormat: .date
+            ))
+            content.addArrangedSubview(separator())
+
+            let credits = snapshot.credits
+            let balance = credits?.unlimited == true ? "不限" : (credits?.balance ?? "—")
+            let resetCount = snapshot.resetCreditCount.map { "\($0) 张" } ?? "—"
+            content.addArrangedSubview(infoRow("额外积分", value: balance))
+            content.addArrangedSubview(infoRow("重置券", value: resetCount))
+            content.addArrangedSubview(infoRow("最早到期", value: earliestResetCreditExpiry(in: snapshot)))
+        } else {
+            content.addArrangedSubview(textLabel(
+                lastError.map { "读取失败：\($0)" } ?? "正在读取 ChatGPT 额度…",
+                size: 13,
+                weight: .regular,
+                color: lastError == nil ? .secondaryLabelColor : .systemRed
+            ))
+            content.addArrangedSubview(expandingSpacer())
+        }
+
+        content.addArrangedSubview(separator())
+        let updateText = lastUpdated.map { "更新于 \(Self.timeFormatter.string(from: $0))" } ?? "每分钟自动刷新"
+        content.addArrangedSubview(textLabel(updateText, size: 11, weight: .regular, color: .tertiaryLabelColor))
+        content.addArrangedSubview(actionButton(
+            title: isRefreshing ? "正在刷新…" : "立即刷新",
+            symbol: "arrow.clockwise",
+            target: target,
+            action: refreshAction,
+            enabled: !isRefreshing
+        ))
+        content.addArrangedSubview(actionButton(
+            title: "打开 ChatGPT",
+            symbol: "arrow.up.forward.app",
+            target: target,
+            action: openAction
+        ))
+        content.addArrangedSubview(actionButton(
+            title: "退出额度显示",
+            symbol: "power",
+            target: target,
+            action: quitAction,
+            destructive: true
+        ))
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: Self.width, height: Self.height)
+    }
+
+    private func windowSection(
+        name: String,
+        resetName: String,
+        window: QuotaWindow?,
+        resetFormat: ResetFormat
+    ) -> NSView {
+        let section = NSStackView()
+        section.orientation = .vertical
+        section.alignment = .leading
+        section.spacing = 6
+
+        guard let window else {
+            section.addArrangedSubview(textLabel("\(name)：暂无数据", size: 13, weight: .medium, color: .secondaryLabelColor))
+            return section
+        }
+
+        let heading = NSStackView()
+        heading.orientation = .horizontal
+        heading.alignment = .centerY
+        heading.distribution = .fill
+        heading.addArrangedSubview(textLabel(name, size: 14, weight: .medium, color: .labelColor))
+        heading.addArrangedSubview(expandingSpacer())
+        heading.addArrangedSubview(textLabel(
+            "\(window.remainingPercent)%",
+            size: 16,
+            weight: .semibold,
+            color: quotaColor(for: window.remainingPercent)
+        ))
+        section.addArrangedSubview(heading)
+
+        let progress = QuotaProgressView(
+            percentage: window.remainingPercent,
+            fillColor: quotaColor(for: window.remainingPercent)
+        )
+        progress.translatesAutoresizingMaskIntoConstraints = false
+        let progressContainer = NSView()
+        progressContainer.addSubview(progress)
+        NSLayoutConstraint.activate([
+            progress.leadingAnchor.constraint(equalTo: progressContainer.leadingAnchor),
+            progress.trailingAnchor.constraint(equalTo: progressContainer.trailingAnchor),
+            progress.centerYAnchor.constraint(equalTo: progressContainer.centerYAnchor),
+            progress.heightAnchor.constraint(equalToConstant: 7),
+            progressContainer.widthAnchor.constraint(equalToConstant: 288),
+            progressContainer.heightAnchor.constraint(equalToConstant: 9),
+        ])
+        section.addArrangedSubview(progressContainer)
+
+        let resetText: String
+        if let date = window.resetsAt {
+            resetText = resetFormat == .time ? Self.timeFormatter.string(from: date) : Self.dateFormatter.string(from: date)
+        } else {
+            resetText = "时间未知"
+        }
+        section.addArrangedSubview(infoRow(resetName, value: resetText, valueColor: .labelColor))
+        return section
+    }
+
+    private func infoRow(_ title: String, value: String, valueColor: NSColor = .systemBlue) -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.addArrangedSubview(textLabel(title, size: 13, weight: .regular, color: .secondaryLabelColor))
+        row.addArrangedSubview(expandingSpacer())
+        row.addArrangedSubview(textLabel(value, size: 13, weight: .medium, color: valueColor))
+        row.widthAnchor.constraint(equalToConstant: 288).isActive = true
+        return row
+    }
+
+    private func actionButton(
+        title: String,
+        symbol: String,
+        target: AnyObject,
+        action: Selector,
+        enabled: Bool = true,
+        destructive: Bool = false
+    ) -> NSButton {
+        let button = NSButton(title: title, target: target, action: action)
+        button.bezelStyle = .texturedRounded
+        button.alignment = .left
+        button.font = .systemFont(ofSize: 13, weight: .medium)
+        button.isEnabled = enabled
+        button.contentTintColor = destructive ? .systemRed : .labelColor
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        button.imagePosition = .imageLeading
+        button.imageScaling = .scaleProportionallyDown
+        button.widthAnchor.constraint(equalToConstant: 288).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 25).isActive = true
+        return button
+    }
+
+    private func separator() -> NSView {
+        let line = NSBox()
+        line.boxType = .separator
+        line.widthAnchor.constraint(equalToConstant: 288).isActive = true
+        return line
+    }
+
+    private func expandingSpacer() -> NSView {
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return spacer
+    }
+
+    private func textLabel(_ text: String, size: CGFloat, weight: NSFont.Weight, color: NSColor) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: size, weight: weight)
+        label.textColor = color
+        label.lineBreakMode = .byTruncatingTail
+        return label
+    }
+
+    private func quotaColor(for remainingPercent: Int) -> NSColor {
+        if remainingPercent <= 15 { return .systemRed }
+        if remainingPercent <= 30 { return .systemOrange }
+        return .systemGreen
+    }
+
+    private func earliestResetCreditExpiry(in snapshot: QuotaSnapshot) -> String {
+        let earliest = snapshot.resetCredits
+            .filter { $0.status == "available" }
+            .compactMap(\.expiresAt)
+            .min()
+        return earliest.map { Self.expiryFormatter.string(from: $0) } ?? "—"
+    }
+
+    private func displayPlan(_ plan: String?) -> String {
+        guard let plan, !plan.isEmpty else { return "账号" }
+        return plan.prefix(1).uppercased() + plan.dropFirst()
+    }
+
+    private enum ResetFormat { case time, date }
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = .current
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = .current
+        formatter.dateFormat = "M月d日（EEE）"
+        return formatter
+    }()
+
+    private static let expiryFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = .current
+        formatter.dateFormat = "M月d日 HH:mm"
+        return formatter
+    }()
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let client = QuotaRPCClient()
@@ -83,38 +374,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func render() {
         renderStatusTitle()
         let menu = NSMenu()
-
-        if let snapshot {
-            menu.addItem(disabledItem("ChatGPT \(displayPlan(snapshot.planType))"))
-            menu.addItem(.separator())
-            menu.addItem(disabledItem(windowText(name: "5 小时窗口", window: snapshot.primary)))
-            menu.addItem(disabledItem(windowText(name: "7 天窗口", window: snapshot.secondary)))
-
-            if let credits = snapshot.credits {
-                let balance = credits.unlimited ? "不限" : (credits.balance ?? "0")
-                let resetCount = snapshot.resetCreditCount ?? 0
-                menu.addItem(disabledItem("额外积分：\(balance)  ·  重置券：\(resetCount)"))
-            }
-        } else {
-            menu.addItem(disabledItem("正在读取 ChatGPT 额度…"))
-        }
-
-        if let lastError {
-            menu.addItem(.separator())
-            menu.addItem(disabledItem("读取失败：\(lastError)"))
-        }
-
-        menu.addItem(.separator())
-        if let lastUpdated {
-            menu.addItem(disabledItem("更新于 \(timeFormatter.string(from: lastUpdated)) · 每分钟自动刷新"))
-        } else {
-            menu.addItem(disabledItem("每分钟自动刷新"))
-        }
-        menu.addItem(actionItem(isRefreshing ? "正在刷新…" : "立即刷新", #selector(refreshMenuItemSelected), enabled: !isRefreshing))
-        menu.addItem(actionItem("打开 ChatGPT", #selector(openChatGPT)))
-        menu.addItem(.separator())
-        menu.addItem(disabledItem("数据来自本机 ChatGPT 只读额度接口"))
-        menu.addItem(actionItem("退出额度显示", #selector(quit)))
+        let card = QuotaMenuCardView(
+            snapshot: snapshot,
+            lastUpdated: lastUpdated,
+            lastError: lastError,
+            isRefreshing: isRefreshing,
+            target: self,
+            refreshAction: #selector(refreshMenuItemSelected),
+            openAction: #selector(openChatGPT),
+            quitAction: #selector(quit)
+        )
+        let cardItem = NSMenuItem()
+        cardItem.view = card
+        menu.addItem(cardItem)
         statusItem.menu = menu
     }
 
@@ -145,45 +417,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.attributedTitle = NSAttributedString(string: title, attributes: attributes)
     }
 
-    private func windowText(name: String, window: QuotaWindow?) -> String {
-        guard let window else { return "\(name)：暂无数据" }
-        let resetText = window.resetsAt.map { resetFormatter.string(from: $0) } ?? "时间未知"
-        return "\(name)：剩余 \(window.remainingPercent)%  ·  \(resetText) 重置"
-    }
-
-    private func displayPlan(_ plan: String?) -> String {
-        guard let plan, !plan.isEmpty else { return "账号" }
-        return plan.prefix(1).uppercased() + plan.dropFirst()
-    }
-
-    private func disabledItem(_ title: String) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        return item
-    }
-
-    private func actionItem(_ title: String, _ action: Selector, enabled: Bool = true) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        item.isEnabled = enabled
-        return item
-    }
-
-    private lazy var resetFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.timeZone = .current
-        formatter.dateFormat = "M月d日 HH:mm"
-        return formatter
-    }()
-
-    private lazy var timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.timeZone = .current
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter
-    }()
 }
 
 let application = NSApplication.shared
