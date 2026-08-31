@@ -47,6 +47,12 @@ private final class QuotaMenuCardView: NSView {
         quitAction: Selector
     ) {
         super.init(frame: NSRect(x: 0, y: 0, width: Self.width, height: Self.height))
+        // NSMenu resolves dynamic NSColor values before the custom view has a
+        // window in some macOS dark-mode configurations. That can turn the
+        // card background white while resolving labels as white as well.
+        // Keep the card's own palette explicitly light so it remains readable
+        // regardless of the system appearance used by the menu bar.
+        appearance = NSAppearance(named: .aqua)
         wantsLayer = true
         layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.98).cgColor
 
