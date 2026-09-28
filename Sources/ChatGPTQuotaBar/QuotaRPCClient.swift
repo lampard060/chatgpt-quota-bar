@@ -125,12 +125,22 @@ final class QuotaRPCClient {
             .appendingPathComponent("Applications", isDirectory: true)
         let systemApplications = URL(fileURLWithPath: "/Applications", isDirectory: true)
         let appNames = ["ChatGPT.app", "Codex.app"]
+        let executablePaths = [
+            // Current desktop builds bundle the CLI in this directory.
+            "Contents/Resources/codex-cli/bin/codex",
+            // Keep the nested app bundle as a fallback for packaging changes.
+            "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+            // Older desktop builds used this location.
+            "Contents/Resources/codex",
+        ]
 
         return [systemApplications, userApplications].flatMap { directory in
-            appNames.map {
-                directory
-                    .appendingPathComponent($0, isDirectory: true)
-                    .appendingPathComponent("Contents/Resources/codex")
+            appNames.flatMap { appName in
+                executablePaths.map { executablePath in
+                    directory
+                        .appendingPathComponent(appName, isDirectory: true)
+                        .appendingPathComponent(executablePath)
+                }
             }
         }
     }
