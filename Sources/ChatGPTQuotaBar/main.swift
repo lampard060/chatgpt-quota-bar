@@ -1,13 +1,47 @@
 import AppKit
 import Foundation
 
+private struct QuotaMenuPalette {
+    let background: NSColor
+    let primaryText: NSColor
+    let secondaryText: NSColor
+    let tertiaryText: NSColor
+    let separator: NSColor
+    let progressTrack: NSColor
+
+    static func current(for appearance: NSAppearance = NSApp.effectiveAppearance) -> Self {
+        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        if isDark {
+            return Self(
+                background: NSColor(srgbRed: 0.11, green: 0.11, blue: 0.12, alpha: 0.98),
+                primaryText: NSColor(srgbRed: 0.96, green: 0.96, blue: 0.97, alpha: 1),
+                secondaryText: NSColor(srgbRed: 0.74, green: 0.74, blue: 0.77, alpha: 1),
+                tertiaryText: NSColor(srgbRed: 0.55, green: 0.55, blue: 0.58, alpha: 1),
+                separator: NSColor(white: 1, alpha: 0.12),
+                progressTrack: NSColor(white: 1, alpha: 0.18)
+            )
+        }
+
+        return Self(
+            background: NSColor(white: 0.98, alpha: 0.98),
+            primaryText: NSColor(white: 0.08, alpha: 1),
+            secondaryText: NSColor(white: 0.43, alpha: 1),
+            tertiaryText: NSColor(white: 0.62, alpha: 1),
+            separator: NSColor(white: 0, alpha: 0.12),
+            progressTrack: NSColor(white: 0, alpha: 0.18)
+        )
+    }
+}
+
 private final class QuotaProgressView: NSView {
     private let percentage: Int
     private let fillColor: NSColor
+    private let trackColor: NSColor
 
-    init(percentage: Int, fillColor: NSColor) {
+    init(percentage: Int, fillColor: NSColor, trackColor: NSColor) {
         self.percentage = percentage
         self.fillColor = fillColor
+        self.trackColor = trackColor
         super.init(frame: .zero)
         wantsLayer = true
     }
@@ -19,7 +53,7 @@ private final class QuotaProgressView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let track = bounds.insetBy(dx: 0, dy: 1)
-        NSColor.separatorColor.withAlphaComponent(0.45).setFill()
+        trackColor.setFill()
         NSBezierPath(roundedRect: track, xRadius: 3, yRadius: 3).fill()
 
         let width = track.width * CGFloat(max(0, min(100, percentage))) / 100
@@ -35,6 +69,7 @@ private final class QuotaMenuCardView: NSView {
     // The card contains two quota sections, two account rows, and three actions.
     // Keep it tall enough so the reset-credit row is never compressed out of view.
     private static let height: CGFloat = 436
+    private let palette: QuotaMenuPalette
 
     init(
         snapshot: QuotaSnapshot?,
@@ -46,15 +81,10 @@ private final class QuotaMenuCardView: NSView {
         openAction: Selector,
         quitAction: Selector
     ) {
+        palette = .current()
         super.init(frame: NSRect(x: 0, y: 0, width: Self.width, height: Self.height))
-        // NSMenu resolves dynamic NSColor values before the custom view has a
-        // window in some macOS dark-mode configurations. That can turn the
-        // card background white while resolving labels as white as well.
-        // Keep the card's own palette explicitly light so it remains readable
-        // regardless of the system appearance used by the menu bar.
-        appearance = NSAppearance(named: .aqua)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.98).cgColor
+        layer?.backgroundColor = palette.background.cgColor
 
         let content = NSStackView()
         content.orientation = .vertical
@@ -70,12 +100,12 @@ private final class QuotaMenuCardView: NSView {
             content.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
 
-        let heading = textLabel("额度概览", size: 16, weight: .semibold, color: .labelColor)
+        let heading = textLabel("额度概览", size: 16, weight: .semibold, color: palette.primaryText)
         content.addArrangedSubview(heading)
 
         if let snapshot {
             let plan = "ChatGPT \(displayPlan(snapshot.planType))"
-            content.addArrangedSubview(textLabel(plan, size: 12, weight: .medium, color: .secondaryLabelColor))
+            content.addArrangedSubview(textLabel(plan, size: 12, weight: .medium, color: palette.secondaryText))
             content.addArrangedSubview(windowSection(
                 name: "5 小时额度",
                 resetName: "重置时间",
@@ -102,14 +132,14 @@ private final class QuotaMenuCardView: NSView {
                 lastError.map { "读取失败：\($0)" } ?? "正在读取 ChatGPT 额度…",
                 size: 13,
                 weight: .regular,
-                color: lastError == nil ? .secondaryLabelColor : .systemRed
+                color: lastError == nil ? palette.secondaryText : .systemRed
             ))
             content.addArrangedSubview(expandingSpacer())
         }
 
         content.addArrangedSubview(separator())
         let updateText = lastUpdated.map { "更新于 \(Self.timeFormatter.string(from: $0))" } ?? "每分钟自动刷新"
-        content.addArrangedSubview(textLabel(updateText, size: 11, weight: .regular, color: .tertiaryLabelColor))
+        content.addArrangedSubview(textLabel(updateText, size: 11, weight: .regular, color: palette.tertiaryText))
         content.addArrangedSubview(actionButton(
             title: isRefreshing ? "正在刷新…" : "立即刷新",
             symbol: "arrow.clockwise",
@@ -152,7 +182,7 @@ private final class QuotaMenuCardView: NSView {
         section.spacing = 6
 
         guard let window else {
-            section.addArrangedSubview(textLabel("\(name)：暂无数据", size: 13, weight: .medium, color: .secondaryLabelColor))
+            section.addArrangedSubview(textLabel("\(name)：暂无数据", size: 13, weight: .medium, color: palette.secondaryText))
             return section
         }
 
@@ -160,7 +190,7 @@ private final class QuotaMenuCardView: NSView {
         heading.orientation = .horizontal
         heading.alignment = .centerY
         heading.distribution = .fill
-        heading.addArrangedSubview(textLabel(name, size: 14, weight: .medium, color: .labelColor))
+        heading.addArrangedSubview(textLabel(name, size: 14, weight: .medium, color: palette.primaryText))
         heading.addArrangedSubview(expandingSpacer())
         heading.addArrangedSubview(textLabel(
             "\(window.remainingPercent)%",
@@ -172,7 +202,8 @@ private final class QuotaMenuCardView: NSView {
 
         let progress = QuotaProgressView(
             percentage: window.remainingPercent,
-            fillColor: quotaColor(for: window.remainingPercent)
+            fillColor: quotaColor(for: window.remainingPercent),
+            trackColor: palette.progressTrack
         )
         progress.translatesAutoresizingMaskIntoConstraints = false
         let progressContainer = NSView()
@@ -193,7 +224,7 @@ private final class QuotaMenuCardView: NSView {
         } else {
             resetText = "时间未知"
         }
-        section.addArrangedSubview(infoRow(resetName, value: resetText, valueColor: .labelColor))
+        section.addArrangedSubview(infoRow(resetName, value: resetText, valueColor: palette.primaryText))
         return section
     }
 
@@ -201,7 +232,7 @@ private final class QuotaMenuCardView: NSView {
         let row = NSStackView()
         row.orientation = .horizontal
         row.alignment = .centerY
-        row.addArrangedSubview(textLabel(title, size: 13, weight: .regular, color: .secondaryLabelColor))
+        row.addArrangedSubview(textLabel(title, size: 13, weight: .regular, color: palette.secondaryText))
         row.addArrangedSubview(expandingSpacer())
         row.addArrangedSubview(textLabel(value, size: 13, weight: .medium, color: valueColor))
         row.widthAnchor.constraint(equalToConstant: 288).isActive = true
@@ -221,7 +252,15 @@ private final class QuotaMenuCardView: NSView {
         button.alignment = .left
         button.font = .systemFont(ofSize: 13, weight: .medium)
         button.isEnabled = enabled
-        button.contentTintColor = destructive ? .systemRed : .labelColor
+        let buttonColor = enabled ? (destructive ? NSColor.systemRed : palette.primaryText) : palette.tertiaryText
+        button.contentTintColor = buttonColor
+        button.attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+                .foregroundColor: buttonColor,
+            ]
+        )
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
         button.imagePosition = .imageLeading
         button.imageScaling = .scaleProportionallyDown
@@ -231,9 +270,11 @@ private final class QuotaMenuCardView: NSView {
     }
 
     private func separator() -> NSView {
-        let line = NSBox()
-        line.boxType = .separator
+        let line = NSView()
+        line.wantsLayer = true
+        line.layer?.backgroundColor = palette.separator.cgColor
         line.widthAnchor.constraint(equalToConstant: 288).isActive = true
+        line.heightAnchor.constraint(equalToConstant: 1).isActive = true
         return line
     }
 
@@ -304,6 +345,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusFormatter = QuotaStatusFormatter()
     private var timer: Timer?
     private var workspaceObserver: NSObjectProtocol?
+    private var appearanceObserver: NSObjectProtocol?
     private var snapshot: QuotaSnapshot?
     private var lastUpdated: Date?
     private var lastError: String?
@@ -328,12 +370,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   app.bundleIdentifier == "com.openai.codex" else { return }
             self?.refresh()
         }
+        appearanceObserver = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.render()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate()
         if let workspaceObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
+        }
+        if let appearanceObserver {
+            DistributedNotificationCenter.default().removeObserver(appearanceObserver)
         }
     }
 

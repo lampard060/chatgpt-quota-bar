@@ -44,7 +44,7 @@ swift test
 ## 发行包
 
 ```bash
-./scripts/package-release.sh 1.0.0
+./scripts/package-release.sh 1.1.0
 ```
 
 生成的 ZIP 和 SHA-256 校验文件位于 `dist/`。推送 `v*` 标签会由 GitHub Actions 自动生成同样的 Release 附件。
